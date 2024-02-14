@@ -1,0 +1,259 @@
+---
+title: "Mixed Effects Models for Nonnormal Responses"
+output:
+  word_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+Page 294 Exercise 1
+
+```{r}
+library(faraway)
+data(ohio)
+```
+
+
+```{r}
+#Checking to see how many mothers smoked at every age
+sum(subset(ohio, age == -2)$smoke)
+sum(subset(ohio, age == -1)$smoke)
+sum(subset(ohio, age == 0)$smoke)
+sum(subset(ohio, age == 1)$smoke)
+```
+
+A) As I have calculated above, the sum for the smoking column is equivalent for all ages. This means that there were no switches from smoking to non smoking or vise versa for mothers. I also checked visually through the data set to make sure that there were no switches that occurred at the same time for two different mothers, making the sums stay the same even though there were switches in the dataset.
+
+
+```{r}
+#Constructing a table to show the proportion of children wheezing at each age broken down by maternal smoking status
+library(dplyr)
+wheezeyear = ohio %>% group_by(id) %>% summarise(resp=sum(resp), smoke=smoke[1], age=age[1])
+wheezeyear
+
+print(prop.table(table(wheezeyear$resp, wheezeyear$smoke)))
+```
+
+B) The table is shown above. 
+
+```{r}
+#Plotting data to show how the proportion of children wheezing changes by age, with separate lines for nonsmoking and smoking mothers
+library(ggplot2)
+plotdata <- ohio %>%
+  group_by(age, smoke) %>%
+  summarize(proportion_wheezing = mean(resp == 1))
+plotdata
+
+plotdata$smoke <- factor(plotdata$smoke, labels = c("Nonsmoking", "Smoking"))
+
+ggplot(plotdata, aes(x = age, y = proportion_wheezing, color = smoke, group = smoke)) +
+  geom_line() +
+  labs(x = "Age", y = "Proportion of Children Wheezing", color = "Mother Smoking") +
+  ggtitle("Proportion of Children Wheezing by Age for Smoking and Nonsmoking Mothers") +
+  theme_minimal()
+```
+
+
+```{r}
+#Grouping data by child to count total (out of 4 years) of wheezing
+wheezeyearprop = wheezeyear
+wheezeyearprop$resp = (wheezeyear$resp)/4
+wheezeyearprop
+
+
+wheezeglm = glm(resp~smoke,binomial, data=wheezeyearprop)
+summary(wheezeglm)
+```
+
+
+D) With a residual deviance of 260 and degrees of freedom at 535, we would conclude that this is not a very good fit. However, maternal smoking is seens as insignificant to wheezing. There could be other plausible explanations. 
+
+
+
+```{r}
+#Fitting a model using GLMM fit using penalized quasi-likelihood
+library(MASS)
+modpql <-glmmPQL(resp ~ age + smoke, random=~1|id, family=binomial,data=ohio)
+summary(modpql)
+```
+
+```{r}
+exp(2.057)
+```
+
+
+E) We can see that age is significant in the model, while smoking is not. A later age shows less wheezing (coef of -0.18). The odds of wheezing changing numerically over time is 7.82 since this is exp(2.057), which is the standard deviation.
+
+```{r}
+#Using Gaussian-Hermit quadrature
+library(lme4)
+modgh <-glmer(resp ~ age + smoke + (1|id), nAGQ=25, family=binomial, data=ohio)
+
+summary(modgh)
+```
+
+F) We can see that the coefficients are generally similar to the PQL model, which is a good sign. The standard deviation is also very similar, meaning these models are most likely comparable.
+
+
+```{r}
+library(INLA)
+formula = resp~ f(id, model = "iid") + age + smoke
+result = inla(formula, family = "binomial", data=ohio)
+
+summary(result)
+```
+
+G) This model also shows a significant value for age, while insignificance for smoking. The "mean" column shows similar values to the coefficients from the previous models, which shows similarity between all of the models so far. 
+
+
+```{r}
+xm <- model.matrix(~ age + smoke, ohio)
+stabledat <- with(ohio, list(Nobs=nrow(ohio), Nsubs=length(unique(ohio$id)), Npreds=ncol(xm), y=resp, subject=id, x=xm))
+```
+
+
+```{r}
+library(rstan)
+rt <-stanc("glmmbin.stan")
+sm <-stan_model(stanc_ret = rt, verbose=FALSE)
+```
+
+```{r}
+# fit = sampling(sm, data=stabledat)
+```
+
+
+```{r}
+library(rstanarm)
+library(bayesplot)
+fit<-stan_glmer(resp ~ age+ smoke + (1|id), data=ohio, family=binomial)
+posterior <- as.array(fit)
+```
+
+```{r}
+#dim(posterior)
+color_scheme_set("red")
+mcmc_trace(posterior, pars = c("age", "smoke"))
+pp_check(fit)
+```
+
+
+```{r}
+fit
+```
+
+```{r}
+mcmc_areas(
+posterior,
+pars = c("smoke", "age"),
+prob = 0.95, # 95% intervals
+prob_outer = 0.99, # 99%
+point_est = "mean"
+)
+print(fit)
+posterior_interval(fit)[1:3,]
+```
+
+
+H) The stan model is not working as the line of code above is crashing my R. However, from previous knowledge, I know that the stan and inla packages both produce similar bayesian models, meaning these models will end up being very similar and comparable.
+
+```{r}
+library(geepack)
+modgeep <- geeglm(resp ~ age + smoke, id=id, corstr="ar1", scale.fix=TRUE, data=ohio, family=binomial)
+summary(modgeep)
+```
+
+I) The coefficients are slightly different in this model and the coefficient of age is slightly less significant. This is normal for a GEE model. The smoke variable is still seen as insignificant. The estimate of 0.501 for alpha is what shows the correlation between observations on the same subject, indicating that a child who already wheezes is likely to continue to wheeze.
+
+
+J) Overall, we can see that the models unanimously agree that age does have a significant negative affect on wheezing, while maternal smoking does not have an affect on wheezing. It seems as though we can trust the GLM and GLMM models results as they all agree with each other and have very similar analysis.
+
+
+Question 3 Page 295
+
+
+```{r}
+#Plotting the data
+data(wavesolder)
+wavesolder$defects = wavesolder$y1 + wavesolder$y2 + wavesolder$y3
+plot(defects~prebake+flux+speed+preheat+cooling+agitator+temp, data=wavesolder)
+```
+
+```{r}
+#Creating a new data set in order to label by id and fit models to individual runs
+firstwavesolder = wavesolder
+firstwavesolder$y = wavesolder$y1
+firstwavesolder$replica = 1
+firstwavesolder$id = (1:16)
+
+secondwavesolder = wavesolder
+secondwavesolder$y = wavesolder$y2
+secondwavesolder$replica = 2
+secondwavesolder$id = (17:32)
+
+thirdwavesolder = wavesolder
+thirdwavesolder$y = wavesolder$y3
+thirdwavesolder$replica = 3
+thirdwavesolder$id = (33:48)
+
+
+combinedwavesolder = rbind(firstwavesolder, secondwavesolder, thirdwavesolder)
+head(combinedwavesolder)
+```
+
+```{r}
+#Fitting poisson GLM to individual runs
+solderglm = glm(y~prebake+flux+speed+preheat+cooling+agitator+temp+replica,poisson, data=combinedwavesolder)
+summary(solderglm)
+```
+
+B) This model is inadequate as the residual deviance is 480.67 on 39 degrees of freedom. This is very far apart and shows a poor fit. However, all variables except for agitator show significance.
+
+
+```{r}
+#Fitting a quasipoisson model to the same variables as above
+quasisolder = glm(y~prebake+flux+speed+preheat+cooling+agitator+temp + replica,quasipoisson, data=combinedwavesolder)
+summary(quasisolder)
+```
+
+B) Quasipoisson shows similar fit (residual deviance and df comparison), however, the significance of the predictors changes. Preheat, cooling, and replica are now shown as insignificant.
+
+
+```{r}
+#Fitting a quasipoisson model using total defects (for each group of three replicas) as the response variable
+solderquasi = glm(defects~prebake+flux+speed+preheat+cooling+agitator+temp,quasipoisson, data=wavesolder)
+summary(solderquasi)
+```
+
+C) This model fit is similar to the last as the residual deviance is much lower, at 168, but the degrees of freedom is also heavily decreased, to 8. The fit is still not very good. The only significant shown now is in prebake, speed, and temp. However, this model is very different to the other two as the response variable is the sum of all of the defects, which means replica # is not included in the regression.
+
+
+```{r}
+#Fitting GEE model with a fixed scale, using autoregressive correlation as the correlation structure
+library(geepack)
+modgeepsolder <- geeglm(y ~ prebake+flux+speed+preheat+cooling+agitator+temp, id=replica, corstr="ar1", scale.fix=TRUE, data=combinedwavesolder, family=poisson)
+summary(modgeepsolder)
+```
+
+D) It is not reasonable to fix the scale because this data does not need to ensure maximum compatability with the GLMM fit.
+
+```{r}
+#Refitting without a fixed scale
+modgeepsoldernotfix <- geeglm(y ~ prebake+flux+speed+preheat+cooling+agitator+temp, id=replica, corstr="ar1", scale.fix=FALSE, data=combinedwavesolder, family=poisson)
+summary(modgeepsoldernotfix)
+```
+
+E) There is evidence as the estimate is 0.127 and the standard error is 0.0289.
+
+
+```{r}
+#Fitting a GEE model with an independent correlation structure
+modgeepsolderind <- geeglm(y ~ prebake+flux+speed+preheat+cooling+agitator+temp, id=replica, corstr="independence", scale.fix=FALSE, data=combinedwavesolder, family=poisson)
+summary(modgeepsolderind)
+```
+
+F) This fit is very similar as all of the same variables are significant, except the addition of preheat. Another difference is that there is evidence of a correlation between successive replicates in this model (with 11.2 estimate and 3.86 standard error). However, the quasipoisson GLM does not support this idea.
